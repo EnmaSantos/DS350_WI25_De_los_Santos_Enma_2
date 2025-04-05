@@ -1,0 +1,498 @@
+---
+title: "Global Population Dynamics Analysis"
+author: "Enmanuel De los Santos Cruz"
+date: "2025-04-03"
+format: html 
+editor: visual 
+keep-md: true
+---
+
+
+
+
+
+```{r setup, message=FALSE, warning=FALSE, include=FALSE}
+
+library(tidyverse)
+
+
+library(viridis)
+library(ggthemes)
+library(patchwork)
+library(ggrepel)
+library(plotly)
+
+
+library(janitor)
+library(countrycode)
+
+
+library(gt)
+
+library(readxl)
+
+library(lubridate)
+```
+
+
+
+```{r load-data, include=FALSE}
+file_path_tfr <- "data/worldbank_tfr.csv" 
+
+tfr_long <- NULL
+
+if (file.exists(file_path_tfr)) {
+  tfr_raw <- read_csv(file_path_tfr, skip = 4) %>%
+    janitor::clean_names() 
+
+  tfr_long <- tfr_raw %>%
+    pivot_longer(
+      cols = matches("^x\\d{4}$"), 
+      names_to = "year",         
+      values_to = "tfr",         
+      names_prefix = "x"        
+    ) %>%
+   
+    mutate(year = as.numeric(year)) %>% 
+    
+    select(country_name, country_code, indicator_name, indicator_code, year, tfr)
+
+  print("Successfully loaded and reshaped TFR data to long format.")
+  
+} else {
+  print(paste("TFR data file not found at:", file_path_tfr))
+}
+
+
+```
+```{r include=FALSE}
+if (!is.null(tfr_long)) {
+
+  print("--- Glimpse of LONG TFR data ---")
+  glimpse(tfr_long)
+  
+  print("--- Summary statistics for LONG TFR data ---")
+  summary(tfr_long) 
+  
+  print("--- Range of years actually present ---")
+  print(range(tfr_long$year, na.rm = TRUE)) 
+  
+  print("--- Unique country names ---")
+  print(head(unique(tfr_long$country_name)))
+  print(paste("Total unique country entries:", length(unique(tfr_long$country_name))))
+
+
+  if("country_name" %in% names(tfr_long)) {
+    print("--- Testing countrycode for continent mapping ---")
+    continents_test <- tfr_long %>%
+      distinct(country_name) %>% 
+      mutate(continent = countrycode(country_name, origin = 'country.name', destination = 'continent', warn = FALSE)) # Added warn = FALSE
+    
+    print(head(continents_test, 10))
+    print(paste("Countries mapped:", sum(!is.na(continents_test$continent)), "out of", nrow(continents_test)))
+  } else {
+    print("Skipping countrycode test as 'country_name' column not found.")
+  }
+  
+} else {
+  print("tfr_long data frame is not available (likely failed to load/reshape).")
+}
+```
+
+
+```{r include=FALSE}
+
+if (!is.null(tfr_long)) {
+  
+  tfr_clean <- tfr_long %>%
+  
+    mutate(continent = countrycode(country_name, origin = 'country.name', destination = 'continent', warn = FALSE)) %>%
+    
+   
+    filter(!is.na(continent)) %>%
+    
+   
+    filter(!is.na(tfr))
+
+  print("--- Glimpse of CLEANED TFR data ---")
+  glimpse(tfr_clean)
+  
+  print("--- Unique continents remaining ---")
+  print(unique(tfr_clean$continent))
+  
+  print("--- Check for remaining NAs in tfr column ---")
+  print(paste("NAs in tfr:", sum(is.na(tfr_clean$tfr))))
+  
+ 
+  print(paste("Remaining rows:", nrow(tfr_clean)))
+  
+} else {
+  print("tfr_long data frame is not available.")
+}
+```
+
+
+```{r aggregate-tfr, include=FALSE}
+# Make sure tfr_clean exists and is not NULL
+if (!is.null(tfr_clean)) {
+  
+  tfr_summary <- tfr_clean %>%
+    group_by(continent, year) %>%
+    summarize(
+      average_tfr = mean(tfr, na.rm = TRUE), # Calculate mean, ignore NAs just in case
+      .groups = 'drop' # Drop grouping structure after summarizing
+    )
+
+  print("--- Glimpse of Summarized TFR data ---")
+  glimpse(tfr_summary)
+  
+  print("--- First few rows of summarized data ---")
+  print(head(tfr_summary))
+  
+} else {
+  print("tfr_clean data frame is not available.")
+}
+```
+
+
+
+```{r plot-tfr-trends, include=FALSE}
+# Make sure tfr_summary exists and is not NULL
+if (!is.null(tfr_summary)) {
+
+  ggplot(tfr_summary, aes(x = year, y = average_tfr, color = continent)) +
+    geom_line(linewidth = 1) + # Draw lines, adjust size with linewidth
+    # scale_color_viridis_d() + # Optional: Apply viridis colors
+    labs(
+      title = "Average Total Fertility Rate Trends by Continent (1960-2023)",
+      subtitle = "Data source: World Bank",
+      x = "Year",
+      y = "Average TFR (Births per woman)",
+      color = "Continent" # Legend title
+    ) +
+    theme_light() # Apply a minimal theme
+
+} else {
+  print("tfr_summary data frame is not available.")
+}
+```
+
+```{r load-pop-proj, include=FALSE}
+# --- Load Population Projections Data (Excel) ---
+# *** UPDATE file path, sheet name, and skip number ***
+file_path_pop <- "data/un_wpp2024_compact_projections.xlsx" 
+sheet_name <- "Estimates" # <-- GUESS: Change this to the actual sheet name!
+rows_to_skip <- 16        # <-- GUESS: Change this to the actual number of rows to skip!
+
+pop_projections_raw <- NULL # Initialize as NULL
+
+
+
+if (file.exists(file_path_pop)) {
+  
+  pop_projections_raw <- read_excel(
+      path = file_path_pop, 
+      sheet = sheet_name, 
+      skip = rows_to_skip,
+      col_types = "text"
+    ) %>%
+    janitor::clean_names() # Clean column names right away
+
+  print("--- Glimpse of raw Population Projection data ---")
+  glimpse(pop_projections_raw)
+  
+} else {
+  print(paste("Population projection file not found at:", file_path_pop))
+}
+```
+```{r load-pop-proj-combined, include=FALSE}
+# --- File Path and Parameters ---
+# *** Double-check path and skip number ***
+file_path_pop <- "data/un_wpp2024_compact_projections.xlsx" 
+rows_to_skip <- 16 # <-- Use the number you confirmed previously
+
+pop_projections_raw <- NULL # Initialize as NULL
+
+# --- Load Estimates Sheet ---
+sheet_estimates <- "Estimates"
+pop_estimates_raw <- NULL
+if (file.exists(file_path_pop)) {
+  try({ # Use try to catch errors if sheet/skip is wrong
+    pop_estimates_raw <- read_excel(
+      path = file_path_pop, 
+      sheet = sheet_estimates, 
+      skip = rows_to_skip,
+      col_types = "text" # Read all as text
+    )
+    print(paste("Loaded", nrow(pop_estimates_raw), "rows from sheet:", sheet_estimates))
+  }, silent = TRUE) # Suppress error messages slightly if it fails
+}
+
+# --- Load Medium Variant Sheet ---
+sheet_medium <- "Medium variant" 
+pop_medium_raw <- NULL
+if (file.exists(file_path_pop)) {
+   try({
+    pop_medium_raw <- read_excel(
+      path = file_path_pop, 
+      sheet = sheet_medium, 
+      skip = rows_to_skip,
+      col_types = "text" # Read all as text
+    )
+    print(paste("Loaded", nrow(pop_medium_raw), "rows from sheet:", sheet_medium))
+  }, silent = TRUE)
+}
+
+# --- Combine and Clean ---
+if (!is.null(pop_estimates_raw) && !is.null(pop_medium_raw)) {
+  print("Combining estimates and medium variant projections...")
+  pop_projections_raw <- bind_rows(pop_estimates_raw, pop_medium_raw) %>%
+    janitor::clean_names() # Clean names AFTER combining
+
+  print("--- Glimpse of COMBINED raw Population Projection data ---")
+  glimpse(pop_projections_raw)
+  
+  print("--- Unique variants in COMBINED data ---")
+  # This should now show BOTH "Estimates" and "Medium variant" (or similar)
+  print(unique(pop_projections_raw$variant)) 
+  
+} else {
+  print("Failed to load data from one or both required sheets. Check sheet names and skip value.")
+  if (!file.exists(file_path_pop)) {
+    print(paste("File not found:", file_path_pop))
+  }
+}
+```
+
+```{r check-raw-na, include=FALSE}
+# Make sure pop_projections_raw exists and is not NULL
+if (!is.null(pop_projections_raw)) {
+
+  na_counts <- pop_projections_raw %>%
+    # Count NAs for every column
+    summarise(across(everything(), ~sum(is.na(.)))) %>%
+    # Pivot to long format for easier reading
+    pivot_longer(everything(), names_to = "column_name", values_to = "na_count") %>%
+    # Arrange to see columns with most NAs first
+    arrange(desc(na_count))
+
+  print("--- NA Counts per Column in Raw Combined Data ---")
+  # Print the full table using print(n=Inf) to see all columns
+  print(na_counts, n = Inf) 
+  
+} else {
+  print("pop_projections_raw data frame is not available.")
+}
+```
+
+
+
+```{r clean-pop-proj-final, include=FALSE}
+# --- Check unique values again (optional, for confirmation) ---
+# if (!is.null(pop_projections_raw)) {
+#   print("--- Unique values in 'type' column (Combined) ---")
+#   print(unique(pop_projections_raw$type)) 
+#   print("--- Unique values in 'variant' column (Combined) ---")
+#   print(unique(pop_projections_raw$variant))
+# }
+
+# --- Clean the combined data ---
+pop_proj_clean <- NULL # Initialize
+
+if (!is.null(pop_projections_raw)) {
+  
+  pop_proj_clean <- pop_projections_raw %>%
+    
+    # Convert columns from character to numeric
+    mutate(
+      year = as.numeric(year), 
+      population = readr::parse_number(total_population_as_of_1_july_thousands) * 1000 
+    ) %>%
+    
+    # Filter for specific entity type (Should be "Country/Area")
+    filter(type == "Country/Area") %>% 
+    
+    # Filter for variant ('Estimates' for past, 'Medium' for future)
+    # AND filter out rows where variant is NA
+    filter(variant == "Estimates" | variant == "Medium") %>% 
+    filter(!is.na(variant)) %>% # Explicitly remove NA variants if any exist for Country/Area
+        
+    # Filter for years (keep relevant range)
+    filter(year >= 1950 & year <= 2100) %>%
+    
+    # Select relevant columns 
+    select(
+      country = region_subregion_country_or_area, 
+      type, 
+      variant, 
+      year, 
+      population
+    ) %>%
+    
+    # Add continent using countrycode package 
+    mutate(continent = countrycode(country, origin = 'country.name', destination = 'continent', warn = FALSE)) %>%
+    
+    # Filter out rows where continent could not be assigned
+    filter(!is.na(continent)) %>%
+    
+    # Filter out any rows where population became NA after conversion
+    filter(!is.na(population))
+
+  print("--- Glimpse of FINAL CLEANED Population Projection data ---")
+  glimpse(pop_proj_clean)
+  
+  print("--- Check range of population values ---")
+  print(summary(pop_proj_clean$population)) 
+  
+  print("--- Check variants remaining ---")
+  print(unique(pop_proj_clean$variant)) # Should now show Estimates and Medium
+  
+} else {
+  print("pop_projections_raw data frame is not available.")
+}
+
+```
+
+
+
+```{r aggregate-pop-proj, include=FALSE}
+# Make sure pop_proj_clean exists and is not NULL
+if (!is.null(pop_proj_clean)) {
+  
+  pop_proj_summary <- pop_proj_clean %>%
+    # Ensure population is numeric before summing (should be, but safe check)
+    filter(!is.na(population)) %>% 
+    # Group by continent and year
+    group_by(continent, year) %>%
+    # Sum the population for all countries within each continent/year group
+    summarize(
+      total_population = sum(population, na.rm = TRUE), 
+      .groups = 'drop' # Drop grouping structure
+    )
+
+  print("--- Glimpse of Summarized Population Projection data ---")
+  glimpse(pop_proj_summary)
+  
+  print("--- First few rows of summarized population data ---")
+  print(head(pop_proj_summary))
+    
+  print("--- Last few rows of summarized population data (check projections) ---")
+  print(tail(pop_proj_summary))
+
+} else {
+  print("pop_proj_clean data frame is not available.")
+  
+}
+```
+
+
+```{r plot-pop-proj, include=FALSE}
+# Make sure pop_proj_summary exists and is not NULL
+if (!is.null(pop_proj_summary)) {
+
+  ggplot(pop_proj_summary, aes(x = year, y = total_population, color = continent)) +
+    geom_line(linewidth = 1) +
+    scale_y_continuous(labels = scales::label_number(scale = 1e-9, suffix = " B")) + # Format y-axis in Billions
+    # scale_color_viridis_d() + # Optional: Uncomment for viridis colors
+    labs(
+      title = "Population Estimates (1950-2023) & Projections (2024-2100) by Continent",
+      subtitle = "Source: UN World Population Prospects 2024 (Medium Variant)",
+      x = "Year",
+      y = "Total Population",
+      color = "Continent"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom") # Move legend below plot
+
+} else {
+  print("pop_proj_summary data frame is not available.")
+}
+```
+## Part 2: Analysis - The Story of Global Population
+
+### Introduction: Asking the Big Questions
+
+For decades, the narrative surrounding global population focused on explosive growth and the potential dangers of overpopulation. Yet, recent headlines increasingly highlight crashing birth rates and aging societies, suggesting humanity might be facing the opposite problem: demographic decline. But which story is true? This analysis delves into recent global data...
+
+To understand this complex landscape, this report seeks answers to several key questions:
+
+* How is the global population growing or changing overall?
+* Are fertility rates declining globally, and how does this vary by continent?
+* What do population projections suggest about the future demographic paths of different continents?
+* What insights can the data offer regarding the concept of "overpopulation" versus emerging challenges like population aging?
+* What potential factors and consequences are associated with these observed trends?
+
+
+### Trend 1: Falling Fertility - A Global Shift
+
+A key driver of population change is the Total Fertility Rate (TFR), the average number of children born per woman. A rate of approximately 2.1 is needed to maintain a stable population size long-term. The following chart visualizes how this rate has evolved across continents since 1960, based on World Bank data.
+
+
+```{r plot-tfr-trends-2, echo=FALSE}
+# Make sure tfr_summary exists and is not NULL
+if (!is.null(tfr_summary)) {
+
+tfr_plot <-  ggplot(tfr_summary, aes(x = year, y = average_tfr, color = continent)) +
+    geom_line(linewidth = 1) + # Draw lines, adjust size with linewidth
+    # scale_color_viridis_d() + # Optional: Apply viridis colors
+    labs(
+      title = "Average Total Fertility Rate Trends by Continent (1960-2023)",
+      subtitle = "Data source: World Bank",
+      x = "Year",
+      y = "Average TFR (Births per woman)",
+      color = "Continent" # Legend title
+    ) +
+    theme_light() # Apply a minimal theme
+
+} else {
+  print("tfr_summary data frame is not available.")
+}
+tfr_plot
+# plotly::ggplotly(tfr_plot)
+
+```
+
+The plot clearly reveals a significant global trend: average fertility rates have declined substantially across all continents since 1960. However, the magnitude and timing of this decline vary dramatically. Africa began with the highest TFR, exceeding 6.6 births per woman, and while it shows a consistent decrease, particularly after 1980, it remains significantly above the replacement level (around 4.0 in 2023) and higher than all other continents. In stark contrast, Europe started with the lowest TFR in 1960 (below 3) and steadily declined further, falling below the replacement level well before 1980 and continuing to decrease towards rates around 1.5 by 2023. Asia and the Americas experienced dramatic falls from high initial rates (around 6), crossing the replacement level threshold around approximately 2008 for Asia and approximately 2003 for Americas respectively, and converging towards lower levels by 2023 (Asia just above 2, Americas just below 2). Oceania also shows a significant decline from its peak, ending near approximately 2.8 births per woman in 2023. This widespread reduction in fertility, strongly linked to factors like increased access to education and healthcare as well as economic development, is the primary engine behind the changing global population landscape we see today.
+
+### Trend 2: Diverging Futures - Population Projections to 2100
+
+
+```{r plot-pop-proj-2}
+# Make sure pop_proj_summary exists and is not NULL
+if (!is.null(pop_proj_summary)) {
+
+ projection_plot <-  ggplot(pop_proj_summary, aes(x = year, y = total_population, color = continent)) +
+    geom_line(linewidth = 1) +
+    scale_y_continuous(labels = scales::label_number(scale = 1e-9, suffix = " B")) + # Format y-axis in Billions
+     scale_color_viridis_d() + 
+    labs(
+      title = "Population Estimates (1950-2023) & Projections (2024-2100) by Continent",
+      subtitle = "Source: UN World Population Prospects 2024 (Medium Variant)",
+      x = "Year",
+      y = "Total Population",
+      color = "Continent"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom") # Move legend below plot
+
+} else {
+  print("pop_proj_summary data frame is not available.")
+}
+projection_plot
+# plotly::ggplotly(projection_plot)
+
+```
+
+The plot clearly reveals a significant global trend: average fertility rates have declined substantially across all continents since 1960. The most striking feature, however, is the divergence led by Africa. While every continent shows a downward trend, Africa's TFR started highest (over 6.6) and, despite falling, remains considerably higher than all others (around 4.0 in 2023), still well above the replacement level. In sharp contrast, Europe, Asia, the Americas, and Oceania have all seen their average TFR fall dramatically, dropping below or near the crucial 2.1 replacement level by the end of the period shown.
+
+### Re-evaluating "Overpopulation"
+
+We have often been presented with the notion that unchecked population growth poses an existential threat, suggesting Earth's resources are too scarce for humanity's numbers. But how accurately does this reflect the current demographic reality? Across the globe, we are witnessing a profound trend of falling fertility rates [as shown in the previous TFR plot]. This decline is so significant in many areas that governments increasingly face the opposite challenge, implementing policies to encourage childbearing, with extreme examples found in countries like South Korea [YouTube](https://www.youtube.com/watch?v=Ufmu1WD2TSk). Examining recent data and projections at the continental level [referencing both of your plots] reveals a picture far more complex than simple, universal 'overpopulation'. While Africa maintains fertility rates well above replacement and is projected to experience substantial population growth through 2100, most other continents, including the currently most populous Asia, now exhibit fertility near or below the replacement level. This leads to projections where Asia's population peaks mid-century and Europe's stagnates or declines. Furthermore, overall global projections anticipate a peak around 2084, not endless growth [cite: https://population.un.org/]. This stark regional divergence suggests the primary demographic challenges may be shifting from universal overpopulation to managing vastly different trajectories – navigating resource and development pressures associated with rapid growth in some regions, while simultaneously addressing the economic and social consequences of population aging and potential decline in others.
+
+### Understanding the Drivers and Consequences
+
+So, why is this big drop in fertility happening pretty much everywhere, just at different speeds, as our first plot showed? It's not really a mystery; it generally follows a pattern experts call the demographic transition that societies tend to move through as they develop [YouTube](https://www.youtube.com/watch/QsBT5EQt348). Think of it in stages: first, living conditions improve, meaning fewer kids die young thanks to better healthcare, sanitation, and food. That's huge, because parents realize they don't need to have as many children just to ensure some survive to adulthood. Then, other powerful factors usually kick in. More access to education, especially opening doors for women, leads to more life choices beyond starting large families early [cite: youtube.com/2]. As countries experience economic development and people move to cities (urbanization), the old incentives change – kids are less needed for farm labor and become more expensive to raise, while access to family planning and modern contraception becomes easier. Layered on top are cultural shifts towards different life goals and maybe more individualism, plus sometimes the sheer high cost of housing and private education can act as a brake, as highlighted in the extreme case of South Korea. It's really this combination of factors, progressing at different paces around the world, that explains the widespread downward TFR trends we visualized.
+
+### Conclusion 
+
+In conclusion, the narrative of global population in the 21st century appears far more nuanced than simple notions of 'overpopulation' might suggest. The data explored here clearly shows a world deep in demographic transition. While fertility rates are declining across all continents, as visualized in the TFR trends, the pace and resulting levels differ dramatically. This leads to starkly diverging future population paths, vividly illustrated by projections showing potential stagnation or decline in regions like Europe and eventually Asia, contrasted against continued, significant growth primarily concentrated in Africa. This analysis confirms that the challenges ahead are not singular; societies will grapple with distinct issues ranging from the economic and social strains of aging populations in some areas to the pressures of resource management, job creation, and infrastructure development for rapidly growing youth populations in others. Understanding these complex, regionally specific demographic shifts, rather than relying on outdated global narratives, is therefore crucial for navigating the challenges and opportunities ahead.

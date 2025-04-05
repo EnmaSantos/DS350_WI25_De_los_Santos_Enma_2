@@ -1,0 +1,121 @@
+---
+title: "challenge template"
+format:
+  html:
+    self-contained: true
+    code-fold: true
+---
+
+```{r}
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(lubridate)
+library(ggrepel)
+
+```
+
+```{r}
+#Now do all your wrangling and plotting, feel free to add more R chunks
+
+family_data <- read.csv("Palmer_family_height.csv")
+
+
+head(family_data)
+```
+
+```{r}
+
+birth_dates <- tribble(
+  ~name,    ~birth_date_str,
+  "Kaylene", "1982-11-05",
+  "Kent",    "2004-03-10",
+  "Mary",    "2006-04-01",
+  "Melody",  "2008-11-23",
+  "Ryan",    "2011-10-31",
+  "Tyson",   "2013-10-31"
+) %>%
+  mutate(birth_date = ymd(birth_date_str)) # Convert string to Date object
+
+
+
+family_data <- family_data %>%
+  mutate(
+    
+    measurement_date = mdy(date)
+    ) %>%
+
+  left_join(birth_dates, by = "name") %>%
+
+  mutate(
+    age_years = as.numeric(difftime(measurement_date, birth_date, units = "days") / 365.25)
+    ) %>%
+  
+  select(name, measurement_date, height, birth_date, age_years)
+
+
+head(family_data)
+summary(family_data$age_years)
+```
+```{r fig.width=10}
+
+
+
+growth_plot <- ggplot(family_data, aes(x = age_years, y = height, color = name)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+
+  geom_text_repel(
+    aes(label = name),                 
+    data = . %>% group_by(name) %>% filter(age_years == max(age_years)), # Use data for the last point per name
+    nudge_x = 0.5,                      
+    nudge_y = 1.7,                      
+    point.padding = 0.4,                
+    box.padding = 0.4,                  
+    force = 1.0,                        
+    segment.color = NA,
+    size = 4,
+    fontface = "bold",
+    min.segment.length = Inf
+  ) +
+  labs(
+    title = "Palmer Family Height by Age",
+    x = "Age (yrs)",
+    y = "Height (inches)"
+  ) +
+  # Keep coordinate adjustment (optional, but helps avoid clipping)
+  coord_cartesian(ylim = c(min(family_data$height) - 1, max(family_data$height) + 3)) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Display the updated plot
+print(growth_plot)
+```
+```{r}
+
+
+family_data <- family_data %>%
+  mutate(measurement_month = month(measurement_date, label = TRUE, abbr = FALSE))
+
+
+timing_plot <- ggplot(family_data, aes(x = measurement_month)) +
+  geom_bar(fill = "steelblue") +
+  labs(
+    title = "Frequency of Height Measurements by Month",
+    x = "Month",
+    y = "Number of Measurements"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis labels
+
+
+print(timing_plot)
+
+
+month_counts <- family_data %>% count(measurement_month)
+print(month_counts)
+cat("\nAnalysis: Look at the plot or table above to see which months have the most measurements. For instance, November and January seem prominent in this dataset.\n")
+```
+
+Measurement timing is not uniform, with clear peaks in November and January, and a smaller one in May. The November frequency aligns well with birthdays for multiple family members. The peaks in January and May do not directly match the provided birth dates, suggesting a combination of birthday-related measurements and measurements potentially tied to other times of year (like New Year's or Spring).
